@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+requests
+python-docx
+PyMuPDF
+langchain
+langchain-community
+langchain-huggingface
+langchain-text-splitters
+langchain-groq
+python-dotenv
+sentence-transformers
+faiss-cpu
+pypdf
+python-docx
+unstructured
