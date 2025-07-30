@@ -51,11 +51,12 @@ def trim_answer(answer, max_sentences=3, max_chars=350):
     return trimmed
 
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from typing import List
 import uvicorn
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import requests
 import tempfile
@@ -72,9 +73,22 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredEmailLoader
 
+
+MODEL_CACHE_DIR = "./model_cache"
+os.environ['SENTENCE_TRANSFORMERS_HOME'] = MODEL_CACHE_DIR
+os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="HackRx RAG API")
+# --- 2. LOAD MODELS ON STARTUP USING LIFESPAN MANAGER ---
+ml_models={}
+@app.on_event("startup")
+async def startup_event():
+    
+    ml_models["embeddings"] = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
+    
+
+
 
 class QARequest(BaseModel):
     documents: str
@@ -117,11 +131,14 @@ async def hackrx_run(request: QARequest):
     
     file_path, ext = download_file(request.documents)
     documents = load_document_by_ext(file_path, ext)
+    os.remove(file_path)
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
     splits = text_splitter.split_documents(documents)
     
-    embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
-    vectorstore = FAISS.from_documents(splits, embeddings)
+    
+    vectorstore = vectorstore = await asyncio.to_thread(
+        FAISS.from_documents, splits, ml_models["embeddings"]
+    )
     retriever = vectorstore.as_retriever()
 
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -149,5 +166,7 @@ async def hackrx_run(request: QARequest):
     return QAResponse(answers=answers)
 
 
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+
