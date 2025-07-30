@@ -5,7 +5,7 @@ python-docx
 PyMuPDF
 langchain
 langchain-community
-langchain-huggingface
+langchain-google-genai
 langchain-text-splitters
 langchain-groq
 python-dotenv

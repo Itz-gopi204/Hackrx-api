@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # --- LangChain Imports ---
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -65,7 +65,7 @@ import json
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -74,19 +74,26 @@ from langchain.chains import create_retrieval_chain
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredEmailLoader
 
 
-MODEL_CACHE_DIR = "./model_cache"
-os.environ['SENTENCE_TRANSFORMERS_HOME'] = MODEL_CACHE_DIR
-os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-load_dotenv()
 
+# Load environment variables from .env file
+load_dotenv()
+ml_models = {}
+
+# Initialize FastAPI App
 app = FastAPI(title="HackRx RAG API")
-# --- 2. LOAD MODELS ON STARTUP USING LIFESPAN MANAGER ---
-ml_models={}
+
+# Use the @app.on_event decorator for startup tasks
 @app.on_event("startup")
 async def startup_event():
     
-    ml_models["embeddings"] = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
+    ml_models["embeddings"] = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     
+    # Unset the problematic environment variable if it exists to fix the SSL error
+    if "SSL_CERT_FILE" in os.environ:       
+        del os.environ["SSL_CERT_FILE"]
+   
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    ml_models["llm"] = ChatGroq(groq_api_key=GROQ_API_KEY, model_name="gemma2-9b-it")
 
 
 
@@ -136,13 +143,12 @@ async def hackrx_run(request: QARequest):
     splits = text_splitter.split_documents(documents)
     
     
-    vectorstore = vectorstore = await asyncio.to_thread(
+    vectorstore = await asyncio.to_thread(
         FAISS.from_documents, splits, ml_models["embeddings"]
     )
+    
     retriever = vectorstore.as_retriever()
-
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    llm = ChatGroq(groq_api_key=GROQ_API_KEY, model_name="gemma2-9b-it")
+    
     parser=StrOutputParser()
     system_prompt = (
         "You are a helpful AI assistant specialized in question answering related to insurance policies and related documents. "
@@ -154,7 +160,7 @@ async def hackrx_run(request: QARequest):
         "{context}"
     )
     qa_prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{input}")])
-    Youtube_chain = create_stuff_documents_chain(llm=llm,prompt=qa_prompt,output_parser=parser)
+    Youtube_chain = create_stuff_documents_chain(llm=ml_models["llm"],prompt=qa_prompt,output_parser=parser)
     retrieval_chain = create_retrieval_chain(retriever, Youtube_chain)
 
     async def get_answer(q):
@@ -166,4 +172,4 @@ async def hackrx_run(request: QARequest):
     return QAResponse(answers=answers)
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000)
