@@ -9,7 +9,6 @@ langchain-huggingface
 langchain-text-splitters
 langchain-groq
 python-dotenv
-sentence-transformers
 faiss-cpu
 pypdf
 python-docx
