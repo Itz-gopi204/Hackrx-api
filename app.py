@@ -136,6 +136,10 @@ def trim_answer(answer, max_sentences=3, max_chars=350):
     if len(trimmed) > max_chars:
         trimmed = trimmed[:max_chars].rsplit(' ', 1)[0] + '...'
     return trimmed
+@app.get("/")
+def read_root():
+    return {"message": "HackRx RAG API is running."}
+
 
 @app.post("/hackrx/run", response_model=QAResponse)
 async def hackrx_run(request: QARequest):
