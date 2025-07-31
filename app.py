@@ -180,7 +180,7 @@ async def hackrx_run(request: QARequest):
         return trim_answer(response['answer'])
 
     # Process questions in batches of 60, wait 60 seconds between batches to respect rate limit
-    batch_size = 60
+    batch_size = 30
     all_answers = []
     for i in range(0, len(request.questions), batch_size):
         batch = request.questions[i:i+batch_size]
