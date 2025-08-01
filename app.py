@@ -86,7 +86,7 @@ app = FastAPI(title="HackRx RAG API")
 @app.on_event("startup")
 async def startup_event():
     
-    ml_models["embeddings"] = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    ml_models["embeddings"] = GoogleGenerativeAIEmbeddings(model="models/embedding-001",google_api_key=os.getenv("GOOGLE_API_KEY"))
 
     # Unset the problematic environment variable if it exists to fix the SSL error
     if "SSL_CERT_FILE" in os.environ:
