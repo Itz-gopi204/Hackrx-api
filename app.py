@@ -130,7 +130,7 @@ def load_document_by_ext(file_path, ext):
     docs = loader.load()
     return docs
 
-def trim_answer(answer, max_sentences=3, max_chars=350):
+def trim_answer(answer, max_sentences=3, max_chars=150):
     sentences = re.split(r'(?<=[.!?]) +', answer)
     trimmed = ' '.join(sentences[:max_sentences])
     if len(trimmed) > max_chars:
@@ -163,9 +163,13 @@ async def hackrx_run(request: QARequest):
         "Use the provided context to answer the question as clearly and precisely as possible. "
         "If the answer is not known from the context, then give the answer which is related to the contest. "
         "Keep answers concise, within two to three sentences.\n\n"
+        "Do not provide any explanations, background, or causes. "
+        "If the answer is not in the context, state ONLY: 'Answer not found in document.' "
+        "Your entire response MUST be under 150 characters. "
         "and if there are any answers reflecting the numbers also give the number in numerical format. "
         "and if there are any questions that have answer in the table so extract the content in the table related to the query. "
         "{context}"
+    
     )
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
