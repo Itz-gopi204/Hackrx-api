@@ -7,7 +7,8 @@ unstructured
 faiss-cpu
 langchain
 langchain-community
-langchain-google-genai
+langchain-ollama
 langchain-text-splitters
 langchain-groq
 python-dotenv
+ngrok
