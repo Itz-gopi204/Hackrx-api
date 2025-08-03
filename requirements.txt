@@ -6,9 +6,9 @@ PyMuPDF
 unstructured
 faiss-cpu
 langchain
+langchain-google-genai
 langchain-community
 langchain-ollama
 langchain-text-splitters
-langchain-groq
 python-dotenv
 ngrok
