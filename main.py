@@ -134,10 +134,6 @@ def load_document_by_ext(file_path, ext):
         raise ValueError("Unsupported file type. Only PDF, DOCX, and EML are supported.")
     return loader.load()
 
-# --- API Endpoints ---
-@app.get("/")
-def read_root():
-    return "RAG API with Google Vertex AI is running."
 
 @app.post("/hackrx/run", response_model=QAResponse)
 async def hackrx_run(request: QARequest):
