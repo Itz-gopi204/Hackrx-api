@@ -134,7 +134,7 @@ async def hackrx_run(request: QARequest):
         logging.info(f"[hackrx_run] Loaded and removed temp file {file_path}")
 
         # 2. Split and Create Vectorstore
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1300, chunk_overlap=130)
         splits = text_splitter.split_documents(documents)
         logging.info(f"[hackrx_run] Split document into {len(splits)} chunks")
         
