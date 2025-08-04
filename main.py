@@ -134,6 +134,10 @@ def load_document_by_ext(file_path, ext):
         raise ValueError("Unsupported file type. Only PDF, DOCX, and EML are supported.")
     return loader.load()
 
+# --- API Endpoints ---
+@app.get("/")
+def read_root():
+    return "RAG API with Google Vertex AI is running."
 
 @app.post("/hackrx/run", response_model=QAResponse)
 async def hackrx_run(request: QARequest):
@@ -151,7 +155,7 @@ async def hackrx_run(request: QARequest):
         logging.info(f"[hackrx_run] Temporary file {file_path} removed.")
 
         logging.info("[hackrx_run] Splitting document into chunks...")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=60)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1600, chunk_overlap=200)
         splits = text_splitter.split_documents(documents)
         logging.info(f"[hackrx_run] Document split into {len(splits)} chunks.")
 
@@ -162,7 +166,7 @@ async def hackrx_run(request: QARequest):
         logging.info("[hackrx_run] FAISS vectorstore created.")
 
         logging.info("[hackrx_run] Creating retriever...")
-        retriever = vectorstore.as_retriever()
+        retriever = vectorstore.as_retriever(search_kwargs={'k': 5})
         logging.info("[hackrx_run] Retriever created.")
 
         async def get_rag_answer(question: str) -> str:
@@ -209,3 +213,6 @@ async def hackrx_run(request: QARequest):
         logging.error(f"[hackrx_run] Unhandled error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+if __name__ == "__main__":
+    # Assumes the script is named 'main.py'
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
