@@ -155,7 +155,7 @@ async def hackrx_run(request: QARequest):
         logging.info(f"[hackrx_run] Temporary file {file_path} removed.")
 
         logging.info("[hackrx_run] Splitting document into chunks...")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1600, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=60)
         splits = text_splitter.split_documents(documents)
         logging.info(f"[hackrx_run] Document split into {len(splits)} chunks.")
 
@@ -166,7 +166,7 @@ async def hackrx_run(request: QARequest):
         logging.info("[hackrx_run] FAISS vectorstore created.")
 
         logging.info("[hackrx_run] Creating retriever...")
-        retriever = vectorstore.as_retriever(search_kwargs={'k': 5})
+        retriever = vectorstore.as_retriever()
         logging.info("[hackrx_run] Retriever created.")
 
         async def get_rag_answer(question: str) -> str:
