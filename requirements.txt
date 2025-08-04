@@ -10,3 +10,4 @@ vertexai
 PyMuPDF
 docx2txt
 unstructured
+faiss-cpu
