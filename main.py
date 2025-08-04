@@ -87,7 +87,7 @@ async def startup_event():
     logging.info(f"[Startup] Loaded Google AI Embeddings model: {embedding_model_name}")
 
     # 2. Configure the Gemini generative model from Vertex AI
-    generative_model_name = "gemini-2.0-flash-001"
+    generative_model_name = "gemini-2.5-flash"
     ml_models["generative_model"] = GenerativeModel(generative_model_name)
     logging.info(f"[Startup] Loaded Vertex AI Generative model: {generative_model_name}")
 
