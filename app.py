@@ -87,7 +87,7 @@ async def startup_event():
     logging.info(f"[Startup] Loaded Google AI Embeddings model: {embedding_model_name}")
 
     # 2. Configure the Gemini generative model from Vertex AI
-    generative_model_name = "gemini-2.5-flash"
+    generative_model_name = "gemini-2.5-pro"
     ml_models["generative_model"] = GenerativeModel(generative_model_name)
     logging.info(f"[Startup] Loaded Vertex AI Generative model: {generative_model_name}")
 
@@ -96,7 +96,7 @@ async def startup_event():
         "You are a helpful AI assistant specialized in question answering related to anything from the document chunks. "
         "Use ONLY the provided context from the documents to answer the question as clearly and precisely as possible. "
         "If the answer is not found in the provided context, state that the information is not available in the documents. "
-        "Keep answers concise, within two to three sentences, and do NOT use unnecessary spaces, new lines, or tabs in general answers. "
+        "do NOT use unnecessary spaces, new lines, or tabs in general answers. "
         "Only use new lines or formatting when required for clarity, such as for tables, lists, or when the document context demands it. "
         "Do not provide any background or causes. "
         "Give the answer without any deviations from the question asked. "
@@ -155,7 +155,7 @@ async def hackrx_run(request: QARequest):
         logging.info(f"[hackrx_run] Temporary file {file_path} removed.")
 
         logging.info("[hackrx_run] Splitting document into chunks...")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1600, chunk_overlap=200)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
         splits = text_splitter.split_documents(documents)
         logging.info(f"[hackrx_run] Document split into {len(splits)} chunks.")
 
@@ -166,7 +166,7 @@ async def hackrx_run(request: QARequest):
         logging.info("[hackrx_run] FAISS vectorstore created.")
 
         logging.info("[hackrx_run] Creating retriever...")
-        retriever = vectorstore.as_retriever(search_kwargs={'k': 5})
+        retriever = vectorstore.as_retriever()
         logging.info("[hackrx_run] Retriever created.")
 
         async def get_rag_answer(question: str) -> str:
