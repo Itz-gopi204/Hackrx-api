@@ -1,10 +1,36 @@
 # Debug logging
 import threading
 import logging
+import time
+import os
+import requests
+import tempfile
+import re
+import asyncio
+
+# --- Third-party imports ---
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List
+import uvicorn
+from dotenv import load_dotenv
+
+# --- Vertex AI and LangChain specific imports ---
+import vertexai
+from vertexai.generative_models import GenerativeModel, Part
+from langchain_community.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, UnstructuredEmailLoader
+from langchain_core.documents import Document as LangchainDocument
+
+
 logging.basicConfig(level=logging.INFO)
-# Global state for LLM rate limiting (in-memory, single process)
+
+# --- Global state & Rate Limiting ---
 LLM_CALLS = []
-LLM_LIMIT = 28  # requests per minute (60 seconds)
+# Set to match a high-RPM Gemini model like Flash 2.0 (e.g., 2000 RPM). Using 1800 as a buffer.
+LLM_LIMIT = 1800
 LLM_LOCK = threading.Lock()
 
 def clean_old_calls():
@@ -23,114 +49,63 @@ async def wait_for_llm_slot():
                 logging.info(f"[RateLimiter] LLM call allowed. Total in last 60s: {len(LLM_CALLS)}")
                 break
             else:
-                logging.warning(f"[RateLimiter] LLM rate limit hit. Waiting for slot. Current: {len(LLM_CALLS)}/{LLM_LIMIT}")
+                logging.warning(f"[RateLimiter] LLM rate limit hit. Waiting. Current: {len(LLM_CALLS)}/{LLM_LIMIT}")
         await asyncio.sleep(1)
-import os
-import tempfile
-import requests
-from dotenv import load_dotenv
-import re
-from typing import List
-import time
-import json
-import warnings
-import hashlib # <-- 1. ADDED HASHLIB TO CREATE UNIQUE FILENAMES
-warnings.filterwarnings("ignore", category=FutureWarning)
 
-# --- LangChain Imports ---
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, UnstructuredEmailLoader
-
-load_dotenv()
-
-# --- Functions (No changes needed here) ---
-def download_file(url):
-    resp = requests.get(url)
-    resp.raise_for_status()
-    path = requests.utils.urlparse(url).path
-    suffix = os.path.splitext(path)[1][1:].lower()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}")
-    tmp.write(resp.content)
-    tmp.close()
-    return tmp.name, suffix
-
-def load_document_by_ext(file_path, ext):
-    if ext == "pdf": loader = PyPDFLoader(file_path)
-    elif ext == "docx": loader = Docx2txtLoader(file_path)
-    elif ext == "eml": loader = UnstructuredEmailLoader(file_path)
-    else: raise ValueError("Unsupported file type.")
-    return loader.load()
-
-def trim_answer(answer, max_sentences=3, max_chars=350):
-    sentences = re.split(r'(?<=[.!?]) +', answer)
-    trimmed = ' '.join(sentences[:max_sentences])
-    if len(trimmed) > max_chars:
-        trimmed = trimmed[:max_chars].rsplit(' ', 1)[0] + '...'
-    # Remove newlines and extra spaces
-    trimmed = trimmed.replace('\n', '.')
-    trimmed = re.sub(r'\s+', ' ', trimmed).strip()
-    return trimmed
-
-
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
-from typing import List
-import uvicorn
-import asyncio
-from contextlib import asynccontextmanager
-import os
-import requests
-import tempfile
-import re
-import json
-from dotenv import load_dotenv
-from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
-from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, UnstructuredEmailLoader
-
-
-
-# Load environment variables from .env file
+# --- FastAPI App Initialization ---
 load_dotenv()
 ml_models = {}
 
-# Initialize FastAPI App
-app = FastAPI(title="HackRx RAG API")
+app = FastAPI(title="RAG API with Google Vertex AI")
 
-# Use the @app.on_event decorator for startup tasks
 @app.on_event("startup")
 async def startup_event():
+    # --- Initialize Vertex AI for the generative model ---
+    GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+    GCP_REGION = os.getenv("GCP_REGION")
+    if not GCP_PROJECT_ID or not GCP_REGION:
+        raise ValueError("GCP_PROJECT_ID and GCP_REGION must be set in .env file")
     
-    logging.info("[Startup] Loading embeddings model...")
-    ml_models["embeddings"] = GoogleGenerativeAIEmbeddings(model="models/embedding-001",google_api_key=os.getenv("GOOGLE_API_KEY"))
+    try:
+        # This uses the GOOGLE_APPLICATION_CREDENTIALS environment variable
+        vertexai.init(project=GCP_PROJECT_ID, location=GCP_REGION)
+        logging.info(f"Vertex AI initialized successfully for project '{GCP_PROJECT_ID}' in region '{GCP_REGION}'.")
+    except Exception as e:
+        raise RuntimeError(f"Could not initialize Vertex AI. Ensure you have authenticated correctly. Error: {e}")
 
-    # Unset the problematic environment variable if it exists to fix the SSL error
-    if "SSL_CERT_FILE" in os.environ:
-        del os.environ["SSL_CERT_FILE"]
-        logging.info("[Startup] Removed SSL_CERT_FILE from environment.")
-
-    # Set up moonshotai/kimi-k2-instruct LLM via Groq
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    ml_models["llm"] = ChatGroq(
-        groq_api_key=GROQ_API_KEY,
-        model_name="meta-llama/llama-4-scout-17b-16e-instruct"
+    # --- Configure Models ---
+    
+    # 1. Use Google AI Studio Embeddings (via API Key)
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    if not GOOGLE_API_KEY:
+        raise ValueError("GOOGLE_API_KEY must be set in your .env file for embeddings.")
+    embedding_model_name = "models/embedding-001"
+    ml_models["embeddings"] = GoogleGenerativeAIEmbeddings(
+        model=embedding_model_name,
+        google_api_key=GOOGLE_API_KEY
     )
-    logging.info("[Startup] LLM model loaded: moonshotai/kimi-k2-instruct via Groq.")
+    logging.info(f"[Startup] Loaded Google AI Embeddings model: {embedding_model_name}")
 
+    # 2. Configure the Gemini generative model from Vertex AI
+    generative_model_name = "gemini-2.5-flash"
+    ml_models["generative_model"] = GenerativeModel(generative_model_name)
+    logging.info(f"[Startup] Loaded Vertex AI Generative model: {generative_model_name}")
 
-
+    # 3. Define the system prompt for Gemini
+    system_prompt = (
+        "You are a helpful AI assistant specialized in question answering related to anything from the document chunks. "
+        "Use ONLY the provided context from the documents to answer the question as clearly and precisely as possible. "
+        "If the answer is not found in the provided context, state that the information is not available in the documents. "
+        "Keep answers concise, within two to three sentences, and do NOT use unnecessary spaces, new lines, or tabs in general answers. "
+        "Only use new lines or formatting when required for clarity, such as for tables, lists, or when the document context demands it. "
+        "Do not provide any background or causes. "
+        "Give the answer without any deviations from the question asked. "
+        "If any answers reflect numbers, give the number in numerical format. "
+        "If any question requires a table, extract and format only the relevant content in the table related to the query, using new lines only where needed for readability."
+    )
+    ml_models["system_prompt"] = system_prompt
+    
+# --- Pydantic Models ---
 class QARequest(BaseModel):
     documents: str
     questions: List[str]
@@ -138,15 +113,15 @@ class QARequest(BaseModel):
 class QAResponse(BaseModel):
     answers: List[str]
 
+# --- Helper Functions (no changes here) ---
 def download_file(url):
     resp = requests.get(url)
     resp.raise_for_status()
     path = requests.utils.urlparse(url).path
     suffix = os.path.splitext(path)[1][1:].lower()
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}")
-    tmp.write(resp.content)
-    tmp.close()
-    return tmp.name, suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}") as tmp:
+        tmp.write(resp.content)
+        return tmp.name, suffix
 
 def load_document_by_ext(file_path, ext):
     if ext == "pdf":
@@ -157,87 +132,87 @@ def load_document_by_ext(file_path, ext):
         loader = UnstructuredEmailLoader(file_path)
     else:
         raise ValueError("Unsupported file type. Only PDF, DOCX, and EML are supported.")
-    docs = loader.load()
-    return docs
+    return loader.load()
 
-def trim_answer(answer, max_sentences=3, max_chars=200):
-    sentences = re.split(r'(?<=[.!?]) +', answer)
-    trimmed = ' '.join(sentences[:max_sentences])
-    if len(trimmed) > max_chars:
-        trimmed = trimmed[:max_chars].rsplit(' ', 1)[0] + '...'
-    return trimmed
+# --- API Endpoints ---
 @app.get("/")
 def read_root():
-    return {"message": "HackRx RAG API is running."}
-
+    return "RAG API with Google Vertex AI is running."
 
 @app.post("/hackrx/run", response_model=QAResponse)
 async def hackrx_run(request: QARequest):
-    
-    logging.info("[hackrx_run] Received request with document: %s and %d questions", request.documents, len(request.questions))
-    try:
-        file_path, ext = download_file(request.documents)
-        logging.info(f"[hackrx_run] Downloaded file to {file_path} with extension {ext}")
-        documents = load_document_by_ext(file_path, ext)
-        logging.info(f"[hackrx_run] Loaded document, got {len(documents)} chunks")
-        os.remove(file_path)
-        logging.info(f"[hackrx_run] Removed temp file {file_path}")
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=50)
-        splits = text_splitter.split_documents(documents)
-        logging.info(f"[hackrx_run] Split document into {len(splits)} splits")
 
+    logging.info("[hackrx_run] Request started. Document URL: %s, Number of questions: %d", request.documents, len(request.questions))
+    try:
+        logging.info("[hackrx_run] Downloading document...")
+        file_path, ext = download_file(request.documents)
+        logging.info(f"[hackrx_run] Document downloaded to {file_path} with extension {ext}")
+
+        logging.info("[hackrx_run] Loading document by extension...")
+        documents = load_document_by_ext(file_path, ext)
+        logging.info(f"[hackrx_run] Loaded document. Number of pages/chunks: {len(documents)}")
+        os.remove(file_path)
+        logging.info(f"[hackrx_run] Temporary file {file_path} removed.")
+
+        logging.info("[hackrx_run] Splitting document into chunks...")
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1600, chunk_overlap=200)
+        splits = text_splitter.split_documents(documents)
+        logging.info(f"[hackrx_run] Document split into {len(splits)} chunks.")
+
+        logging.info("[hackrx_run] Creating FAISS vectorstore...")
         vectorstore = await asyncio.to_thread(
             FAISS.from_documents, splits, ml_models["embeddings"]
         )
-        logging.info(f"[hackrx_run] Built FAISS vectorstore")
+        logging.info("[hackrx_run] FAISS vectorstore created.")
 
-        # Set up retriever and RAG chain
-        retriever = vectorstore.as_retriever()
-        from langchain_core.output_parsers import StrOutputParser
-        parser = StrOutputParser()
-        system_prompt = (
-           "You are a helpful AI assistant specialized in question answering related to insurance policies and related documents. "
-            "Use the provided context to answer the question as clearly and precisely as possible. "
-            "If the answer is not known from the context, then give the answer which is related to the contest. "
-            "Keep answers concise, within two to three sentences.\n\n"
-            "Do not provide any background, or causes. "
-            "Your entire response MUST be under 200 characters. "
-            "and if there are any answers reflecting the numbers also give the number in numerical format. "
-            "and if there are any questions that have answer in the table so extract the content in the table related to the query. "
-            "{context}"
-        )
-        qa_prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", "{input}")
-        ])
-        rag_chain = create_stuff_documents_chain(
-            llm=ml_models["llm"],
-            prompt=qa_prompt,
-            output_parser=parser
-        )
-        retrieval_chain = create_retrieval_chain(retriever, rag_chain)
+        logging.info("[hackrx_run] Creating retriever...")
+        retriever = vectorstore.as_retriever(search_kwargs={'k': 5})
+        logging.info("[hackrx_run] Retriever created.")
 
-        async def get_rag_answer(q):
+        async def get_rag_answer(question: str) -> str:
+            logging.info(f"[get_rag_answer] Started for question: {question}")
             await wait_for_llm_slot()
-            loop = asyncio.get_event_loop()
-            try:
-                logging.info(f"[get_rag_answer] Processing question: {q}")
-                response = await loop.run_in_executor(None, retrieval_chain.invoke, {"input": q})
-                logging.info(f"[get_rag_answer] Got response for question: {q}")
-                return trim_answer(response['answer'])
-            except Exception as e:
-                logging.error(f"[get_rag_answer] Error for question: {q} - {e}")
-                return f"Error: {str(e)}"
+            logging.info(f"[get_rag_answer] LLM slot acquired for question: {question}")
 
-        # Process all questions in a single batch; global rate limiter will throttle as needed
-        logging.info(f"[hackrx_run] Processing {len(request.questions)} questions...")
+            logging.info(f"[get_rag_answer] Retrieving relevant documents for question: {question}")
+            retrieved_docs: List[LangchainDocument] = await retriever.ainvoke(question)
+            logging.info(f"[get_rag_answer] Retrieved {len(retrieved_docs)} relevant documents for question: {question}")
+
+            context_str = "\n\n".join([f"Source: {doc.metadata.get('source', 'N/A')}\nContent: {doc.page_content}" for doc in retrieved_docs])
+            logging.info(f"[get_rag_answer] Constructed context string for question: {question}")
+
+            prompt_parts = [
+                ml_models["system_prompt"],
+                "\n\nCONTEXT:\n",
+                context_str,
+                f"\n\nQUESTION: {question}"
+            ]
+            logging.info(f"[get_rag_answer] Prompt constructed for question: {question}")
+
+            try:
+                logging.info(f"[get_rag_answer] Calling Vertex AI for question: {question[:50]}...")
+                model: GenerativeModel = ml_models["generative_model"]
+                response = await model.generate_content_async(
+                    prompt_parts,
+                    generation_config={"temperature": 0.2},
+                )
+                logging.info(f"[get_rag_answer] Received response from Vertex AI for question: {question}")
+                answer = response.text.strip()
+                logging.info(f"[get_rag_answer] Final answer for question: {question}: {answer}")
+                return answer
+            except Exception as e:
+                logging.error(f"[get_rag_answer] Error calling Vertex AI for question: {question}: {e}")
+                return f"Error processing question: {e}"
+
+        logging.info(f"[hackrx_run] Processing {len(request.questions)} questions asynchronously...")
         all_answers = await asyncio.gather(*(get_rag_answer(q) for q in request.questions))
-        logging.info(f"[hackrx_run] Finished processing all questions.")
+        logging.info("[hackrx_run] Finished processing all questions.")
+        logging.info(f"[hackrx_run] Final answers: {all_answers}")
         return QAResponse(answers=all_answers)
     except Exception as e:
-        logging.error(f"[hackrx_run] Error: {e}")
+        logging.error(f"[hackrx_run] Unhandled error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000)
-
+    # Assumes the script is named 'main.py'
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
