@@ -8,6 +8,8 @@ import tempfile
 import re
 import asyncio
 
+logging.info(f"Credential file exists: {os.path.exists(os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))}")
+
 # --- Third-party imports ---
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
