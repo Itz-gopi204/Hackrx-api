@@ -115,11 +115,6 @@ class QARequest(BaseModel):
 class QAResponse(BaseModel):
     answers: List[str]
 
-# --- API Endpoints ---
-@app.get("/")
-def read_root():
-    """Root endpoint to check if the API is running."""
-    return {"message": "HackRx RAG API is running."}
 
 @app.post("/hackrx/run", response_model=QAResponse)
 async def hackrx_run(request: QARequest):
